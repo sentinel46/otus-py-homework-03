@@ -7,12 +7,13 @@ import datetime
 import logging
 import hashlib
 import uuid
+import re
 from optparse import OptionParser
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-SALT = "Otus"
-ADMIN_LOGIN = "admin"
-ADMIN_SALT = "42"
+SALT = 'Otus'
+ADMIN_LOGIN = 'admin'
+ADMIN_SALT = '42'
 OK = 200
 BAD_REQUEST = 400
 FORBIDDEN = 403
@@ -20,52 +21,163 @@ NOT_FOUND = 404
 INVALID_REQUEST = 422
 INTERNAL_ERROR = 500
 ERRORS = {
-    BAD_REQUEST: "Bad Request",
-    FORBIDDEN: "Forbidden",
-    NOT_FOUND: "Not Found",
-    INVALID_REQUEST: "Invalid Request",
-    INTERNAL_ERROR: "Internal Server Error",
+    BAD_REQUEST: 'Bad Request',
+    FORBIDDEN: 'Forbidden',
+    NOT_FOUND: 'Not Found',
+    INVALID_REQUEST: 'Invalid Request',
+    INTERNAL_ERROR: 'Internal Server Error',
 }
 UNKNOWN = 0
 MALE = 1
 FEMALE = 2
 GENDERS = {
-    UNKNOWN: "unknown",
-    MALE: "male",
-    FEMALE: "female",
+    UNKNOWN: 'unknown',
+    MALE: 'male',
+    FEMALE: 'female',
 }
 
 
 class CharField(object):
-    pass
+    def __init__(self, required=False, nullable=True):
+        self.required = required
+        self.nullable = nullable
+
+    def __set__(self, instance, value):
+        if value is None and (self.required or not self.nullable):
+            raise AttributeError('Value is required', value)
+        elif value is None and self.nullable:
+            self.value = value
+        else:
+            self.validate(value)
+            self.value = value
+
+    def validate(self, value):
+        logging.debug('validating chars')
+        if not (type(value) == str):
+            raise ValueError('Char Field got non-string type')
 
 
 class ArgumentsField(object):
-    pass
+    def __init__(self, required=False, nullable=True):
+        self.required = required
+        self.nullable = nullable
+
+    def __set__(self, instance, value):
+        if value is None and (self.required or not self.nullable):
+            raise AttributeError('Value is required', value)
+        elif value is None and self.nullable:
+            self.value = value
+        else:
+            self.validate(value)
+            self.value = value
+
+    def validate(self, value):
+        logging.debug('validating arguments')
 
 
 class EmailField(CharField):
-    pass
+    def validate(self, value):
+        logging.debug('validating email')
+        super().validate(value)
+        regexp = r'\"?([-a-zA-Z0-9.`?{}]+@\w+\.\w+\"?'
+        pattern = re.compile(regexp)
+        if not re.match(pattern, value):
+            raise ValueError('Email Field got not valid value')
 
 
 class PhoneField(object):
-    pass
+    def __init__(self, required=False, nullable=True):
+        self.required = required
+        self.nullable = nullable
+
+    def __set__(self, instance, value):
+        if value is None and (self.required or not self.nullable):
+            raise AttributeError('Value is required', value)
+        elif value is None and self.nullable:
+            self.value = value
+        else:
+            self.validate(value)
+            self.value = value
+
+    def validate(self, value):
+        logging.debug('validating phone')
+        value = str(value)
+        if not (len(value) == 11):
+            raise ValueError('Phone Field must contain 11 numbers')
+        elif not value.isdigit():
+            raise ValueError('Phone Field must contain only digits')
+        elif not value.startswith('7'):
+            raise ValueError('Phone Field must start with "7"')
 
 
 class DateField(object):
-    pass
+    def __init__(self, required=False, nullable=True):
+        self.required = required
+        self.nullable = nullable
+
+    def __set__(self, instance, value):
+        if value is None and (self.required or not self.nullable):
+            raise AttributeError('Value is required', value)
+        elif value is None and self.nullable:
+            self.value = value
+        else:
+            self.validate(value)
+            self.value = value
+
+    def validate(self, value):
+        logging.debug('validating date')
+        try:
+            date = datetime.strptime(value, '%d.%m.%Y').date()
+        except ValueError as e:
+            raise ValueError('Date Field must be in dd.mm.yyyy format')
 
 
-class BirthDayField(object):
-    pass
+class BirthDayField(DateField):
+    def validate(self, value):
+        logging.debug('validating birthday')
+        super().validate(value)
+        value = datetime.strptime(value, '%d.%m.%Y').date()
+        today = datetime.now().date()
+        if not (today - value).days // 365 < 70:
+            raise ValueError('Birthday Field must be ')
 
 
 class GenderField(object):
-    pass
+    def __init__(self, required=False, nullable=True):
+        self.required = required
+        self.nullable = nullable
+
+    def __set__(self, instance, value):
+        if value is None and (self.required or not self.nullable):
+            raise AttributeError('Value is required', value)
+        elif value is None and self.nullable:
+            self.value = value
+        else:
+            self.validate(value)
+            self.value = value
+
+    def validate(self, value):
+        logging.debug('validating gender')
+        if value not in GENDERS:
+            raise ValueError('Unknown gender')
 
 
 class ClientIDsField(object):
-    pass
+    def __init__(self, required=False, nullable=True):
+        self.required = required
+        self.nullable = nullable
+
+    def __set__(self, instance, value):
+        if value is None and (self.required or not self.nullable):
+            raise AttributeError('Value is required', value)
+        elif value is None and self.nullable:
+            self.value = value
+        else:
+            self.validate(value)
+            self.value = value
+
+    def validate(self, value):
+        logging.debug('validating client IDs')
 
 
 class ClientsInterestsRequest(object):
@@ -80,6 +192,13 @@ class OnlineScoreRequest(object):
     phone = PhoneField(required=False, nullable=True)
     birthday = BirthDayField(required=False, nullable=True)
     gender = GenderField(required=False, nullable=True)
+
+    def validate(self):
+        validating_pairs = [
+            ('first_name', 'last_name'),
+            ('email', 'phone'),
+            ('birthday', 'gender'),
+        ]
 
 
 class MethodRequest(object):
@@ -121,35 +240,40 @@ class MainHTTPHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         response, code = {}, OK
         context = {"request_id": self.get_request_id(self.headers)}
+        logging.debug(f'Context: {context}')
         request = None
         try:
+            logging.debug('Get data string')
             data_string = self.rfile.read(int(self.headers['Content-Length']))
+            logging.debug(f'Data string: {data_string}')
             request = json.loads(data_string)
-        except:
+            logging.info(f'Request: {request}')
+        except Exception as e:
+            logging.info(f'Request error: {e}')
             code = BAD_REQUEST
 
         if request:
-            path = self.path.strip("/")
-            logging.info("%s: %s %s" % (self.path, data_string, context["request_id"]))
+            path = self.path.strip('/')
+            logging.info(f'{self.path}: {data_string} {context["request_id"]}')
             if path in self.router:
                 try:
-                    response, code = self.router[path]({"body": request, "headers": self.headers}, context, self.store)
+                    response, code = self.router[path]({'body': request, 'headers': self.headers}, context, self.store)
                 except Exception as e:
-                    logging.exception("Unexpected error: %s" % e)
+                    logging.exception(f'Unexpected error: {e}')
                     code = INTERNAL_ERROR
             else:
                 code = NOT_FOUND
 
         self.send_response(code)
-        self.send_header("Content-Type", "application/json")
+        self.send_header('Content-Type', 'application/json')
         self.end_headers()
         if code not in ERRORS:
-            r = {"response": response, "code": code}
+            r = {'response': response, 'code': code}
         else:
-            r = {"error": response or ERRORS.get(code, "Unknown Error"), "code": code}
+            r = {'error': response or ERRORS.get(code, 'Unknown Error'), 'code': code}
         context.update(r)
         logging.info(context)
-        self.wfile.write(json.dumps(r))
+        self.wfile.write(json.dumps(r).encode('utf-8'))
         return
 
 
